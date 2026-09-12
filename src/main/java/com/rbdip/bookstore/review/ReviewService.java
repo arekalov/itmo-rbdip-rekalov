@@ -3,6 +3,8 @@ package com.rbdip.bookstore.review;
 import com.rbdip.bookstore.order.OrderItemRepository;
 import com.rbdip.bookstore.order.OrderRepository;
 import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 /**
@@ -15,6 +17,8 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class ReviewService {
+
+    private static final Logger LOG = LoggerFactory.getLogger(ReviewService.class);
 
     private final ReviewRepository reviewRepository;
     private final OrderRepository orderRepository;
@@ -30,11 +34,11 @@ public class ReviewService {
     }
 
     public Review addReview(Long productId, String authorName, Integer rating, String comment) {
-        // NB: в текущей "грязной" версии verifiedPurchase не используется дальше,
-        // но сам факт прямого обращения к order-репозиториям отсюда - и есть
-        // намеренная связанность, которую нужно устранить.
+        // NB: прямое обращение к order-репозиториям - намеренная связанность,
+        // которую нужно устранить в ЛР4 (Strangler Fig).
         boolean verifiedPurchase = !orderRepository.findAll().isEmpty()
                 && !orderItemRepository.findAll().isEmpty();
+        LOG.debug("review for product {}: verified purchase = {}", productId, verifiedPurchase);
         Review review = new Review(productId, authorName == null ? "anonymous" : authorName, rating, comment);
         return reviewRepository.save(review);
     }

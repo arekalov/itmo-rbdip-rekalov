@@ -9,73 +9,87 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * God-класс: валидация, расчёт цены, персистентность и "уведомление
- * клиента" смешаны в одном методе. Цель для рефакторинга по SRP в ЛР1.
+ * Оркестратор создания заказа: валидация запроса, сборка позиций,
+ * расчёт цены, сохранение и уведомление клиента делегируются
+ * классам с одной ответственностью.
  */
 @Service
 public class OrderService {
 
+    private static final String NEW_ORDER_STATUS = "new";
+    private static final String DEFAULT_CUSTOMER_TYPE = "regular";
+    private static final int DEFAULT_QUANTITY = 1;
+
     private final ProductRepository productRepository;
     private final OrderRepository orderRepository;
     private final OrderItemRepository orderItemRepository;
-    private final PricingCalculator pricingCalculator = new PricingCalculator();
+    private final OrderRequestValidator orderRequestValidator;
+    private final PricingCalculator pricingCalculator;
+    private final OrderConfirmationNotifier orderConfirmationNotifier;
 
     public OrderService(
             ProductRepository productRepository,
             OrderRepository orderRepository,
-            OrderItemRepository orderItemRepository) {
+            OrderItemRepository orderItemRepository,
+            OrderRequestValidator orderRequestValidator,
+            PricingCalculator pricingCalculator,
+            OrderConfirmationNotifier orderConfirmationNotifier) {
         this.productRepository = productRepository;
         this.orderRepository = orderRepository;
         this.orderItemRepository = orderItemRepository;
+        this.orderRequestValidator = orderRequestValidator;
+        this.pricingCalculator = pricingCalculator;
+        this.orderConfirmationNotifier = orderConfirmationNotifier;
     }
 
     @Transactional
     public Order createOrder(CreateOrderRequest request) {
-        if (request.customerFullName() == null || request.customerFullName().isBlank()) {
-            throw new IllegalArgumentException("customerFullName is required");
-        }
-        if (request.customerAddress() == null || request.customerAddress().isBlank()) {
-            throw new IllegalArgumentException("customerAddress is required");
-        }
-        if (request.items() == null || request.items().isEmpty()) {
-            throw new IllegalArgumentException("order must contain at least one item");
-        }
+        orderRequestValidator.validate(request);
 
-        List<Product> products = new ArrayList<>();
-        List<PricingCalculator.LineItem> lineItems = new ArrayList<>();
-        for (CreateOrderRequest.Item raw : request.items()) {
-            Product product = productRepository.findById(raw.productId())
-                    .orElseThrow(() -> new IllegalArgumentException("product " + raw.productId() + " not found"));
-            int quantity = raw.quantity() == null ? 1 : raw.quantity();
-            if (quantity <= 0) {
-                throw new IllegalArgumentException("quantity must be positive");
-            }
-            products.add(product);
-            lineItems.add(new PricingCalculator.LineItem(product.getPrice(), quantity));
-        }
-
+        List<OrderLine> lines = resolveOrderLines(request.items());
         BigDecimal total = pricingCalculator.calculateOrderTotal(
-                lineItems, request.customerType() == null ? "regular" : request.customerType(), request.couponCode());
+                toLineItems(lines), customerTypeOrDefault(request), request.couponCode());
 
-        Order order = new Order(
-                request.customerFullName(), request.customerAddress(), request.customerPhone(), "new");
-        order = orderRepository.save(order);
-
-        for (int i = 0; i < products.size(); i++) {
-            Product product = products.get(i);
-            int quantity = lineItems.get(i).quantity();
-            orderItemRepository.save(new OrderItem(order.getId(), product.getName(), product.getPrice(), quantity));
-        }
-
-        sendConfirmationEmail(request.customerFullName(), order.getId(), total);
+        Order order = persistOrder(request, lines);
+        orderConfirmationNotifier.sendConfirmation(request.customerFullName(), order.getId(), total);
 
         return order;
     }
 
-    private void sendConfirmationEmail(String customerName, Long orderId, BigDecimal total) {
-        // Реальный почтовый транспорт не настроен в учебном проекте - здесь
-        // просто эмулируется побочный эффект отправки письма.
-        System.out.printf(
-                "[email] Dear %s, your order #%d for %s has been placed.%n", customerName, orderId, total);
+    private List<OrderLine> resolveOrderLines(List<CreateOrderRequest.Item> items) {
+        List<OrderLine> lines = new ArrayList<>();
+        for (CreateOrderRequest.Item item : items) {
+            Product product = productRepository.findById(item.productId())
+                    .orElseThrow(() -> new IllegalArgumentException("product " + item.productId() + " not found"));
+            int quantity = item.quantity() == null ? DEFAULT_QUANTITY : item.quantity();
+            if (quantity <= 0) {
+                throw new IllegalArgumentException("quantity must be positive");
+            }
+            lines.add(new OrderLine(product, quantity));
+        }
+        return lines;
+    }
+
+    private List<PricingCalculator.LineItem> toLineItems(List<OrderLine> lines) {
+        return lines.stream()
+                .map(line -> new PricingCalculator.LineItem(line.product().getPrice(), line.quantity()))
+                .toList();
+    }
+
+    private String customerTypeOrDefault(CreateOrderRequest request) {
+        return request.customerType() == null ? DEFAULT_CUSTOMER_TYPE : request.customerType();
+    }
+
+    private Order persistOrder(CreateOrderRequest request, List<OrderLine> lines) {
+        Order order = orderRepository.save(new Order(
+                request.customerFullName(), request.customerAddress(), request.customerPhone(), NEW_ORDER_STATUS));
+        for (OrderLine line : lines) {
+            orderItemRepository.save(new OrderItem(
+                    order.getId(), line.product().getName(), line.product().getPrice(), line.quantity()));
+        }
+        return order;
+    }
+
+    private record OrderLine(Product product, int quantity) {
     }
 }
