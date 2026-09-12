@@ -16,29 +16,25 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class OrderService {
 
-    private static final String NEW_ORDER_STATUS = "new";
     private static final String DEFAULT_CUSTOMER_TYPE = "regular";
     private static final int DEFAULT_QUANTITY = 1;
 
     private final ProductRepository productRepository;
-    private final OrderRepository orderRepository;
-    private final OrderItemRepository orderItemRepository;
     private final OrderRequestValidator orderRequestValidator;
     private final PricingCalculator pricingCalculator;
+    private final OrderPersister orderPersister;
     private final OrderConfirmationNotifier orderConfirmationNotifier;
 
     public OrderService(
             ProductRepository productRepository,
-            OrderRepository orderRepository,
-            OrderItemRepository orderItemRepository,
             OrderRequestValidator orderRequestValidator,
             PricingCalculator pricingCalculator,
+            OrderPersister orderPersister,
             OrderConfirmationNotifier orderConfirmationNotifier) {
         this.productRepository = productRepository;
-        this.orderRepository = orderRepository;
-        this.orderItemRepository = orderItemRepository;
         this.orderRequestValidator = orderRequestValidator;
         this.pricingCalculator = pricingCalculator;
+        this.orderPersister = orderPersister;
         this.orderConfirmationNotifier = orderConfirmationNotifier;
     }
 
@@ -50,7 +46,7 @@ public class OrderService {
         BigDecimal total = pricingCalculator.calculateOrderTotal(
                 toLineItems(lines), customerTypeOrDefault(request), request.couponCode());
 
-        Order order = persistOrder(request, lines);
+        Order order = orderPersister.persistNewOrder(request, lines);
         orderConfirmationNotifier.sendConfirmation(request.customerFullName(), order.getId(), total);
 
         return order;
@@ -78,18 +74,5 @@ public class OrderService {
 
     private String customerTypeOrDefault(CreateOrderRequest request) {
         return request.customerType() == null ? DEFAULT_CUSTOMER_TYPE : request.customerType();
-    }
-
-    private Order persistOrder(CreateOrderRequest request, List<OrderLine> lines) {
-        Order order = orderRepository.save(new Order(
-                request.customerFullName(), request.customerAddress(), request.customerPhone(), NEW_ORDER_STATUS));
-        for (OrderLine line : lines) {
-            orderItemRepository.save(new OrderItem(
-                    order.getId(), line.product().getName(), line.product().getPrice(), line.quantity()));
-        }
-        return order;
-    }
-
-    private record OrderLine(Product product, int quantity) {
     }
 }
