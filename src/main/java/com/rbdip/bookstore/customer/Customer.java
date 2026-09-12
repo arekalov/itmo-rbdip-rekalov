@@ -9,7 +9,7 @@ import jakarta.persistence.Table;
 
 /**
  * Контактные данные клиента, вынесенные из orders при нормализации
- * схемы (ЛР2). Заказ ссылается на клиента по внешнему ключу.
+ * схемы (ЛР2). После ЛР3 имя хранится раздельно: first_name/last_name.
  */
 @Entity
 @Table(name = "customers")
@@ -19,8 +19,11 @@ public class Customer {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "full_name", nullable = false)
-    private String fullName;
+    @Column(name = "first_name", nullable = false)
+    private String firstName;
+
+    @Column(name = "last_name")
+    private String lastName;
 
     @Column
     private String address;
@@ -32,8 +35,9 @@ public class Customer {
         // for JPA
     }
 
-    public Customer(String fullName, String address, String phone) {
-        this.fullName = fullName;
+    public Customer(PersonName name, String address, String phone) {
+        this.firstName = name.firstName();
+        this.lastName = name.lastName();
         this.address = address;
         this.phone = phone;
     }
@@ -42,8 +46,16 @@ public class Customer {
         return id;
     }
 
+    public String getFirstName() {
+        return firstName;
+    }
+
+    public String getLastName() {
+        return lastName;
+    }
+
     public String getFullName() {
-        return fullName;
+        return new PersonName(firstName, lastName).toFullName();
     }
 
     public String getAddress() {
